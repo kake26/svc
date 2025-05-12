@@ -1,138 +1,162 @@
 #!/bin/bash
 
-# Unified service management wrapper for systemd and OpenRC
+# svc.sh: Unified wrapper for OpenRC, systemd, and package management (apt, dnf, pacman)
 
-# Function to detect init system
-detect_init_system() {
-    if command -v systemctl >/dev/null 2>&1 && pgrep systemd >/dev/null; then
-        echo "systemd"
-    elif command -v rc-service >/dev/null 2>&1; then
-        echo "openrc"
+# Exit on error
+set -e
+
+# Detect package manager
+detect_pkg_manager() {
+    if command -v apt >/dev/null 2>&1; then
+        echo "apt"
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "dnf"
+    elif command -v pacman >/dev/null 2>&1; then
+        echo "pacman"
     else
-        echo "unknown"
+        echo "none"
+        exit 1
     fi
 }
 
-# Function to display usage
-usage() {
-    echo "Usage: $0 {start|stop|restart|enable|disable|status|list} [service]"
-    echo "Commands:"
-    echo "  start   - Start a service"
-    echo "  stop    - Stop a service"
-    echo "  restart - Restart a service"
-    echo "  enable  - Enable a service to start at boot"
-    echo "  disable - Disable a service from starting at boot"
-    echo "  status  - Check the status of a service"
-    echo "  list    - List all services and their status"
-    exit 1
+# Package management functions
+pkg_install() {
+    local pkg="$1"
+    case $(detect_pkg_manager) in
+        apt)
+            sudo apt install -y "$pkg"
+            ;;
+        dnf)
+            sudo dnf install -y "$pkg"
+            ;;
+        pacman)
+            sudo pacman -S --noconfirm "$pkg"
+            ;;
+        *)
+            echo "Error: No supported package manager found."
+            exit 1
+            ;;
+    esac
 }
 
-# Check for sufficient arguments
-if [ $# -lt 1 ]; then
-    usage
-fi
+pkg_remove() {
+    local pkg="$1"
+    case $(detect_pkg_manager) in
+        apt)
+            sudo apt remove -y "$pkg"
+            ;;
+        dnf)
+            sudo dnf remove -y "$pkg"
+            ;;
+        pacman)
+            sudo pacman -R --noconfirm "$pkg"
+            ;;
+        *)
+            echo "Error: No supported package manager found."
+            exit 1
+            ;;
+    esac
+}
 
-COMMAND="$1"
-SERVICE="$2"
-INIT_SYSTEM=$(detect_init_system)
+pkg_update() {
+    case $(detect_pkg_manager) in
+        apt)
+            sudo apt update
+            ;;
+        dnf)
+            sudo dnf check-update
+            ;;
+        pacman)
+            sudo pacman -Sy
+            ;;
+        *)
+            echo "Error: No supported package manager found."
+            exit 1
+            ;;
+    esac
+}
 
-# Exit if init system is not supported
-if [ "$INIT_SYSTEM" = "unknown" ]; then
-    echo "Error: Unsupported init system. Only systemd and OpenRC are supported."
-    exit 1
-fi
+pkg_search() {
+    local pkg="$1"
+    case $(detect_pkg_manager) in
+        apt)
+            apt search "$pkg"
+            ;;
+        dnf)
+            dnf search "$pkg"
+            ;;
+        pacman)
+            pacman -Ss "$pkg"
+            ;;
+        *)
+            echo "Error: No supported package manager found."
+            exit 1
+            ;;
+    esac
+}
 
-# Map unified commands to init-specific commands
-case "$INIT_SYSTEM" in
-    systemd)
-        case "$COMMAND" in
-            start)
-                [ -z "$SERVICE" ] && usage
-                systemctl start "$SERVICE"
+# Service management functions
+service_cmd() {
+    local svc="$1"
+    local action="$2"
+    if command -v systemctl >/dev/null 2>&1; then
+        sudo systemctl "$action" "$svc"
+    elif command -v rc-service >/dev/null 2>&1; then
+        sudo rc-service "$svc" "$action"
+    else
+        echo "Error: Neither systemd nor OpenRC found."
+        exit 1
+    fi
+}
+
+service_list() {
+    if command -v systemctl >/dev/null 2>&1; then
+        # List systemd services with status, using original clean logic
+        systemctl list-units --type=service --all --no-pager --no-legend | \
+            awk '$1 !~ /^●$/ && $1 != "" {if ($2 == "not-found") print $1, "not-found"; else if ($3 == "active" && $4 == "running") print $1, "running"; else if ($3 == "active" && $4 == "exited") print $1, "exited"; else print $1, "stopped"}' | \
+            column -t
+    elif command -v rc-service >/dev/null 2>&1; then
+        # List OpenRC services with status
+        for svc in $(rc-service -l); do
+            status=$(rc-service "$svc" status 2>/dev/null | grep -o 'started\|stopped\|crashed' || echo "unknown")
+            echo "$svc $status"
+        done | column -t
+    else
+        echo "Error: Neither systemd nor OpenRC found."
+        exit 1
+    fi
+}
+
+# Main logic
+case "$1" in
+    pkg)
+        case "$2" in
+            install)
+                pkg_install "$3"
                 ;;
-            stop)
-                [ -z "$SERVICE" ] && usage
-                systemctl stop "$SERVICE"
+            remove)
+                pkg_remove "$3"
                 ;;
-            restart)
-                [ -z "$SERVICE" ] && usage
-                systemctl restart "$SERVICE"
+            update)
+                pkg_update
                 ;;
-            enable)
-                [ -z "$SERVICE" ] && usage
-                systemctl enable "$SERVICE"
-                ;;
-            disable)
-                [ -z "$SERVICE" ] && usage
-                systemctl disable "$SERVICE"
-                ;;
-            status)
-                [ -z "$SERVICE" ] && usage
-                systemctl status "$SERVICE"
-                ;;
-            list)
-                if [ -n "$SERVICE" ]; then
-                    echo "Error: 'list' command does not take a service argument."
-                    usage
-                fi
-                systemctl list-units --type=service --all --no-pager --no-legend | \
-                    awk '$1 !~ /^●$/ && $1 != "" {if ($2 == "not-found") print $1, "not-found"; else if ($3 == "active" && $4 == "running") print $1, "running"; else if ($3 == "active" && $4 == "exited") print $1, "exited"; else print $1, "stopped"}' | \
-                    column -t
+            search)
+                pkg_search "$3"
                 ;;
             *)
-                usage
+                echo "Usage: svc pkg {install|remove|update|search} [package]"
+                exit 1
                 ;;
         esac
         ;;
-    openrc)
-        case "$COMMAND" in
-            start)
-                [ -z "$SERVICE" ] && usage
-                rc-service "$SERVICE" start
-                ;;
-            stop)
-                [ -z "$SERVICE" ] && usage
-                rc-service "$SERVICE" stop
-                ;;
-            restart)
-                [ -z "$SERVICE" ] && usage
-                rc-service "$SERVICE" restart
-                ;;
-            enable)
-                [ -z "$SERVICE" ] && usage
-                rc-update add "$SERVICE" default
-                ;;
-            disable)
-                [ -z "$SERVICE" ] && usage
-                rc-update del "$SERVICE" default
-                ;;
-            status)
-                [ -z "$SERVICE" ] && usage
-                rc-service "$SERVICE" status
-                ;;
-            list)
-                if [ -n "$SERVICE" ]; then
-                    echo "Error: 'list' command does not take a service argument."
-                    usage
-                fi
-                for svc in $(rc-service -l); do
-                    status=$(rc-service "$svc" status | grep -q "started" && echo "running" || echo "stopped")
-                    echo "$svc $status"
-                done | column -t
-                ;;
-            *)
-                usage
-                ;;
-        esac
+    start|stop|restart|enable|disable)
+        service_cmd "$2" "$1"
+        ;;
+    list)
+        service_list
+        ;;
+    *)
+        echo "Usage: svc {start|stop|restart|enable|disable} <service> | svc list | svc pkg {install|remove|update|search} [package]"
+        exit 1
         ;;
 esac
-
-# Check command execution status
-if [ $? -eq 0 ]; then
-    if [ "$COMMAND" != "list" ] && [ "$COMMAND" != "status" ]; then
-        echo "$COMMAND on $SERVICE ($INIT_SYSTEM) completed successfully."
-    fi
-else
-    echo "Error: Failed to execute $COMMAND on $SERVICE ($INIT_SYSTEM)."
-    exit 1
-fi
