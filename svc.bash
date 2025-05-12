@@ -76,6 +76,45 @@ pkg_update() {
     esac
 }
 
+pkg_upgrade() {
+    case $(detect_pkg_manager) in
+        apt)
+            sudo apt upgrade -y
+            ;;
+        dnf)
+            sudo dnf upgrade -y
+            ;;
+        pacman)
+            sudo pacman -Syu --noconfirm
+            ;;
+        *)
+            echo "Error: No supported package manager found."
+            exit 1
+            ;;
+    esac
+}
+
+pkg_keyring() {
+    case $(detect_pkg_manager) in
+        apt)
+            echo "No keyring management needed for apt."
+            ;;
+        dnf)
+            echo "No keyring management needed for dnf."
+            ;;
+        pacman)
+            echo "Refreshing pacman keyring..."
+            sudo pacman-key --refresh-keys
+            echo "Updating archlinux-keyring..."
+            sudo pacman -S archlinux-keyring --noconfirm
+            ;;
+        *)
+            echo "Error: No supported package manager found."
+            exit 1
+            ;;
+    esac
+}
+
 pkg_search() {
     local pkg="$1"
     case $(detect_pkg_manager) in
@@ -111,7 +150,7 @@ service_cmd() {
 
 service_list() {
     if command -v systemctl >/dev/null 2>&1; then
-        # List systemd services with status, using original clean logic
+        # List systemd services with status, using clean logic
         systemctl list-units --type=service --all --no-pager --no-legend | \
             awk '$1 !~ /^●$/ && $1 != "" {if ($2 == "not-found") print $1, "not-found"; else if ($3 == "active" && $4 == "running") print $1, "running"; else if ($3 == "active" && $4 == "exited") print $1, "exited"; else print $1, "stopped"}' | \
             column -t
@@ -140,11 +179,17 @@ case "$1" in
             update)
                 pkg_update
                 ;;
+            upgrade)
+                pkg_upgrade
+                ;;
+            keyring)
+                pkg_keyring
+                ;;
             search)
                 pkg_search "$3"
                 ;;
             *)
-                echo "Usage: svc pkg {install|remove|update|search} [package]"
+                echo "Usage: svc pkg {install|remove|update|upgrade|keyring|search} [package]"
                 exit 1
                 ;;
         esac
@@ -156,7 +201,7 @@ case "$1" in
         service_list
         ;;
     *)
-        echo "Usage: svc {start|stop|restart|enable|disable} <service> | svc list | svc pkg {install|remove|update|search} [package]"
+        echo "Usage: svc {start|stop|restart|enable|disable} <service> | svc list | svc pkg {install|remove|update|upgrade|keyring|search} [package]"
         exit 1
         ;;
 esac
