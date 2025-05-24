@@ -1,207 +1,139 @@
-#!/bin/bash
+#!/bin/sh
 
-# svc.sh: Unified wrapper for OpenRC, systemd, and package management (apt, dnf, pacman)
+# svc.sh - Unified service and package management wrapper for systemd, OpenRC (Devuan), and OpenRC (Alpine)
+# Usage: svc.sh <command> [service|package]
 
-# Exit on error
-set -e
+# Detect init system and distribution
+if [ -f /run/systemd/system ]; then
+    INIT_SYSTEM="systemd"
+elif [ -f /sbin/openrc ]; then
+    if grep -qi "alpine" /etc/os-release; then
+        INIT_SYSTEM="openrc-alpine"
+    else
+        INIT_SYSTEM="openrc"
+    fi
+else
+    echo "Unsupported init system"
+    exit 1
+fi
 
 # Detect package manager
-detect_pkg_manager() {
-    if command -v apt >/dev/null 2>&1; then
-        echo "apt"
-    elif command -v dnf >/dev/null 2>&1; then
-        echo "dnf"
-    elif command -v pacman >/dev/null 2>&1; then
-        echo "pacman"
-    else
-        echo "none"
-        exit 1
-    fi
-}
-
-# Package management functions
-pkg_install() {
-    local pkg="$1"
-    case $(detect_pkg_manager) in
-        apt)
-            sudo apt install -y "$pkg"
-            ;;
-        dnf)
-            sudo dnf install -y "$pkg"
-            ;;
-        pacman)
-            sudo pacman -S --noconfirm "$pkg"
-            ;;
-        *)
-            echo "Error: No supported package manager found."
-            exit 1
-            ;;
-    esac
-}
-
-pkg_remove() {
-    local pkg="$1"
-    case $(detect_pkg_manager) in
-        apt)
-            sudo apt remove -y "$pkg"
-            ;;
-        dnf)
-            sudo dnf remove -y "$pkg"
-            ;;
-        pacman)
-            sudo pacman -R --noconfirm "$pkg"
-            ;;
-        *)
-            echo "Error: No supported package manager found."
-            exit 1
-            ;;
-    esac
-}
-
-pkg_update() {
-    case $(detect_pkg_manager) in
-        apt)
-            sudo apt update
-            ;;
-        dnf)
-            sudo dnf check-update
-            ;;
-        pacman)
-            sudo pacman -Sy
-            ;;
-        *)
-            echo "Error: No supported package manager found."
-            exit 1
-            ;;
-    esac
-}
-
-pkg_upgrade() {
-    case $(detect_pkg_manager) in
-        apt)
-            sudo apt upgrade -y
-            ;;
-        dnf)
-            sudo dnf upgrade -y
-            ;;
-        pacman)
-            sudo pacman -Syu --noconfirm
-            ;;
-        *)
-            echo "Error: No supported package manager found."
-            exit 1
-            ;;
-    esac
-}
-
-pkg_keyring() {
-    case $(detect_pkg_manager) in
-        apt)
-            echo "No keyring management needed for apt."
-            ;;
-        dnf)
-            echo "No keyring management needed for dnf."
-            ;;
-        pacman)
-            echo "Refreshing pacman keyring..."
-            sudo pacman-key --refresh-keys
-            echo "Updating archlinux-keyring..."
-            sudo pacman -S archlinux-keyring --noconfirm
-            ;;
-        *)
-            echo "Error: No supported package manager found."
-            exit 1
-            ;;
-    esac
-}
-
-pkg_search() {
-    local pkg="$1"
-    case $(detect_pkg_manager) in
-        apt)
-            apt search "$pkg"
-            ;;
-        dnf)
-            dnf search "$pkg"
-            ;;
-        pacman)
-            pacman -Ss "$pkg"
-            ;;
-        *)
-            echo "Error: No supported package manager found."
-            exit 1
-            ;;
-    esac
-}
+if command -v apt >/dev/null; then
+    PKG_MANAGER="apt"
+elif command -v dnf >/dev/null; then
+    PKG_MANAGER="dnf"
+elif command -v pacman >/dev/null; then
+    PKG_MANAGER="pacman"
+elif command -v apk >/dev/null; then
+    PKG_MANAGER="apk"
+else
+    PKG_MANAGER="none"
+fi
 
 # Service management functions
-service_cmd() {
-    local svc="$1"
-    local action="$2"
-    if command -v systemctl >/dev/null 2>&1; then
-        sudo systemctl "$action" "$svc"
-    elif command -v rc-service >/dev/null 2>&1; then
-        sudo rc-service "$svc" "$action"
-    else
-        echo "Error: Neither systemd nor OpenRC found."
-        exit 1
-    fi
-}
-
-service_list() {
-    if command -v systemctl >/dev/null 2>&1; then
-        # List systemd services with status, using clean logic
-        systemctl list-units --type=service --all --no-pager --no-legend | \
-            awk '$1 !~ /^●$/ && $1 != "" {if ($2 == "not-found") print $1, "not-found"; else if ($3 == "active" && $4 == "running") print $1, "running"; else if ($3 == "active" && $4 == "exited") print $1, "exited"; else print $1, "stopped"}' | \
-            column -t
-    elif command -v rc-service >/dev/null 2>&1; then
-        # List OpenRC services with status
-        for svc in $(rc-service -l); do
-            status=$(rc-service "$svc" status 2>/dev/null | grep -o 'started\|stopped\|crashed' || echo "unknown")
-            echo "$svc $status"
-        done | column -t
-    else
-        echo "Error: Neither systemd nor OpenRC found."
-        exit 1
-    fi
-}
-
-# Main logic
-case "$1" in
-    pkg)
-        case "$2" in
-            install)
-                pkg_install "$3"
-                ;;
-            remove)
-                pkg_remove "$3"
-                ;;
-            update)
-                pkg_update
-                ;;
-            upgrade)
-                pkg_upgrade
-                ;;
-            keyring)
-                pkg_keyring
-                ;;
-            search)
-                pkg_search "$3"
-                ;;
-            *)
-                echo "Usage: svc pkg {install|remove|update|upgrade|keyring|search} [package]"
-                exit 1
-                ;;
-        esac
+case "$INIT_SYSTEM" in
+    systemd)
+        svc_start() { systemctl start "$1"; }
+        svc_stop() { systemctl stop "$1"; }
+        svc_enable() { systemctl enable "$1"; }
+        svc_disable() { systemctl disable "$1"; }
+        svc_status() { systemctl status "$1"; }
+        svc_list() { systemctl list-units --type=service --state=running; }
         ;;
-    start|stop|restart|enable|disable)
-        service_cmd "$2" "$1"
+    openrc)
+        svc_start() { service "$1" start; }
+        svc_stop() { service "$1" stop; }
+        svc_enable() { rc-update add "$1" default; }
+        svc_disable() { rc-update del "$1" default; }
+        svc_status() { service "$1" status; }
+        svc_list() { rc-status -a; }
+        ;;
+    openrc-alpine)
+        svc_start() { rc-service "$1" start; }
+        svc_stop() { rc-service "$1" stop; }
+        svc_enable() { rc-update add "$1" default; }
+        svc_disable() { rc-update del "$1" default; }
+        svc_status() { rc-service "$1" status; }
+        svc_list() { rc-status; }
+        ;;
+esac
+
+# Package management functions
+case "$PKG_MANAGER" in
+    apt)
+        pkg_install() { apt install -y "$1"; }
+        pkg_remove() { apt remove -y "$1"; }
+        pkg_update() { apt update && apt upgrade -y; }
+        pkg_search() { apt search "$1"; }
+        ;;
+    dnf)
+        pkg_install() { dnf install -y "$1"; }
+        pkg_remove() { dnf remove -y "$1"; }
+        pkg_update() { dnf upgrade -y; }
+        pkg_search() { dnf search "$1"; }
+        ;;
+    pacman)
+        pkg_install() { pacman -S --noconfirm "$1"; }
+        pkg_remove() { pacman -R --noconfirm "$1"; }
+        pkg_update() { pacman -Syu --noconfirm; }
+        pkg_search() { pacman -Ss "$1"; }
+        ;;
+    apk)
+        pkg_install() { apk add "$1"; }
+        pkg_remove() { apk del "$1"; }
+        pkg_update() { apk update && apk upgrade; }
+        pkg_search() { apk search "$1"; }
+        ;;
+    none)
+        pkg_install() { echo "No package manager detected"; exit 1; }
+        pkg_remove() { echo "No package manager detected"; exit 1; }
+        pkg_update() { echo "No package manager detected"; exit 1; }
+        pkg_search() { echo "No package manager detected"; exit 1; }
+        ;;
+esac
+
+# Main command handler
+case "$1" in
+    start)
+        [ -z "$2" ] && { echo "Usage: $0 start <service>"; exit 1; }
+        svc_start "$2"
+        ;;
+    stop)
+        [ -z "$2" ] && { echo "Usage: $0 stop <service>"; exit 1; }
+        svc_stop "$2"
+        ;;
+    enable)
+        [ -z "$2" ] && { echo "Usage: $0 enable <service>"; exit 1; }
+        svc_enable "$2"
+        ;;
+    disable)
+        [ -z "$2" ] && { echo "Usage: $0 disable <service>"; exit 1; }
+        svc_disable "$2"
+        ;;
+    status)
+        [ -z "$2" ] && { echo "Usage: $0 status <service>"; exit 1; }
+        svc_status "$2"
         ;;
     list)
-        service_list
+        svc_list
+        ;;
+    install)
+        [ -z "$2" ] && { echo "Usage: $0 install <package>"; exit 1; }
+        pkg_install "$2"
+        ;;
+    remove)
+        [ -z "$2" ] && { echo "Usage: $0 remove <package>"; exit 1; }
+        pkg_remove "$2"
+        ;;
+    update)
+        pkg_update
+        ;;
+    search)
+        [ -z "$2" ] && { echo "Usage: $0 search <package>"; exit 1; }
+        pkg_search "$2"
         ;;
     *)
-        echo "Usage: svc {start|stop|restart|enable|disable} <service> | svc list | svc pkg {install|remove|update|upgrade|keyring|search} [package]"
+        echo "Usage: $0 {start|stop|enable|disable|status|list|install|remove|update|search} [service|package]"
         exit 1
         ;;
 esac
