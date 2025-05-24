@@ -3,8 +3,8 @@
 # svc.sh - Unified service and package management wrapper for systemd, OpenRC (Devuan), and OpenRC (Alpine)
 # Usage: svc.sh <command> [service|package]
 
-# Detect init system and distribution
-if [ -f /run/systemd/system ]; then
+# Detect init system
+if [ -f /run/systemd/system ] || command -v systemctl >/dev/null || grep -q systemd /proc/1/comm; then
     INIT_SYSTEM="systemd"
 elif [ -f /sbin/openrc ]; then
     if grep -qi "alpine" /etc/os-release; then
