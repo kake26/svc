@@ -85,13 +85,40 @@ namespace svc_csharp
             if (Environment.OSVersion.Platform != PlatformID.Unix)
                 return "unknown";
 
-            // systemd detection
-            if (File.Exists("/run/systemd/system") || File.Exists("/usr/bin/systemctl"))
-                return "systemd";
+            // Check if this is Devuan (which uses OpenRC but may have systemd shim)
+            bool isDevuan = false;
+            try
+            {
+                string[] osReleaseLines = File.ReadAllLines("/etc/os-release");
+                foreach (string line in osReleaseLines)
+                {
+                    if (line.StartsWith("ID=") && line.Contains("devuan"))
+                    {
+                        isDevuan = true;
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+                // If we can't read os-release, continue with normal detection
+            }
 
-            // OpenRC detection
-            if (File.Exists("/sbin/rc-service") || File.Exists("/usr/sbin/rc-service") ||
-                File.Exists("/etc/init.d/rc") || Directory.Exists("/etc/init.d"))
+            // OpenRC detection (prioritize for Devuan)
+            bool hasOpenRC = File.Exists("/sbin/rc-service") || File.Exists("/usr/sbin/rc-service") ||
+                           File.Exists("/etc/init.d/rc") || Directory.Exists("/etc/init.d");
+            
+            bool hasSystemd = File.Exists("/run/systemd/system") || File.Exists("/usr/bin/systemctl");
+
+            // If Devuan, prefer OpenRC even if systemd shim exists
+            if (isDevuan && hasOpenRC)
+                return "openrc";
+            
+            // Normal detection logic
+            if (hasSystemd)
+                return "systemd";
+            
+            if (hasOpenRC)
                 return "openrc";
 
             return "unknown";
